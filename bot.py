@@ -1,9 +1,12 @@
+import asyncio
 import logging
+import time
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
-    CommandHandler,
     CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
 )
 
@@ -14,6 +17,8 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+# Приглушаем болтливые логи httpx
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # ===================== ТЕКСТЫ =====================
@@ -114,7 +119,7 @@ FINAL_TEXT = (
 
 # ===================== КЛАВИАТУРЫ =====================
 
-def main_menu():
+def main_menu() -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton("📖 Глава 1 — Начало", callback_data="ch1")],
         [InlineKeyboardButton("🏆 Глава 2 — Победы", callback_data="ch2")],
@@ -125,7 +130,7 @@ def main_menu():
     return InlineKeyboardMarkup(keyboard)
 
 
-def back_menu():
+def back_menu() -> InlineKeyboardMarkup:
     keyboard = [[InlineKeyboardButton("⬅️ Назад к главам", callback_data="menu")]]
     return InlineKeyboardMarkup(keyboard)
 
@@ -167,12 +172,41 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===================== ЗАПУСК =====================
 
+def build_application() -> Application:
+    """Создаёт Application с увеличенными таймаутами для long-polling."""
+    return (
+        Application.builder()
+        .token(TOKEN)
+        # Таймауты для getUpdates (long-polling) — Telegram держит соединение до 30 сек
+        .get_updates_read_timeout(60.0)
+        .get_updates_connect_timeout(15.0)
+        .get_updates_pool_timeout(10.0)
+        # Общие таймауты для остальных API-запросов
+        .read_timeout(30.0)
+        .connect_timeout(10.0)
+        .pool_timeout(5.0)
+        .build()
+    )
+
+
 def main():
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    logger.info("Бот запущен...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    while True:
+        try:
+            app = build_application()
+            app.add_handler(CommandHandler("start", start))
+            app.add_handler(CallbackQueryHandler(button_handler))
+            logger.info("✅ Бот запущен и слушает Telegram...")
+            app.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=False,
+                close_loop=False,
+            )
+        except (KeyboardInterrupt, SystemExit):
+            logger.info("🛑 Бот остановлен вручную.")
+            break
+        except Exception as e:
+            logger.error(f"💥 Бот упал: {e}. Перезапуск через 10 секунд...", exc_info=True)
+            time.sleep(10)
 
 
 if __name__ == "__main__":
