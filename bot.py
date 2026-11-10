@@ -1,6 +1,5 @@
-import asyncio
 import logging
-import time
+import os
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -11,13 +10,15 @@ from telegram.ext import (
 )
 
 # ===================== НАСТРОЙКИ =====================
-TOKEN = "8770882017:AAGwGisD6Pjy9xQESCc1x2Bnsv1gVBlNCHg"  # потом заменишь
+TOKEN = os.environ.get("BOT_TOKEN", "8770882017:AAGwGisD6Pjy9xQESCc1x2Bnsv1gVBlNCHg")
+# Render даёт переменную RENDER_EXTERNAL_URL автоматически
+RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "")
+PORT = int(os.environ.get("PORT", 10000))
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
-# Приглушаем болтливые логи httpx
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
@@ -26,12 +27,12 @@ logger = logging.getLogger(__name__)
 START_TEXT = (
     "📖 *Последний шанс*\n"
     "───────────────\n\n"
-    "История одного человека, который слишком сильно полюбил — "
-    "и слишком дорого за это заплатил.\n\n"
-    "Это не просто рассказ. Это мануал, оставленный сообществом *zark* "
-    "как память о том, кто был, но кем уже не станет.\n\n"
+    "Перед тобой история одного человека. Он полюбил слишком сильно — "
+    "и заплатил за это дороже, чем мог себе представить.\n\n"
+    "Это не просто рассказ. Это мануал, который сообщество *zark* "
+    "оставило как память о том, кем он был — и кем уже не станет.\n\n"
     "💔 *Не привязывай свои чувства к чужому человеку.*\n\n"
-    "Выбери главу и пройди этот путь вместе с ним 👇"
+    "Пройди этот путь вместе с ним. Выбери главу 👇"
 )
 
 CHAPTERS = {
@@ -120,19 +121,19 @@ FINAL_TEXT = (
 # ===================== КЛАВИАТУРЫ =====================
 
 def main_menu() -> InlineKeyboardMarkup:
-    keyboard = [
+    return InlineKeyboardMarkup([
         [InlineKeyboardButton("📖 Глава 1 — Начало", callback_data="ch1")],
         [InlineKeyboardButton("🏆 Глава 2 — Победы", callback_data="ch2")],
         [InlineKeyboardButton("🌑 Глава 3 — Выгорание", callback_data="ch3")],
         [InlineKeyboardButton("🌫 Глава 4 — Осознание", callback_data="ch4")],
         [InlineKeyboardButton("📜 Общество / Архив", callback_data="final")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    ])
 
 
 def back_menu() -> InlineKeyboardMarkup:
-    keyboard = [[InlineKeyboardButton("⬅️ Назад к главам", callback_data="menu")]]
-    return InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ Назад к главам", callback_data="menu")]
+    ])
 
 
 # ===================== ХЕНДЛЕРЫ =====================
@@ -152,61 +153,57 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "menu":
         await query.edit_message_text(
-            START_TEXT,
-            parse_mode="Markdown",
-            reply_markup=main_menu(),
+            START_TEXT, parse_mode="Markdown", reply_markup=main_menu()
         )
     elif data in CHAPTERS:
         await query.edit_message_text(
-            CHAPTERS[data],
-            parse_mode="Markdown",
-            reply_markup=back_menu(),
+            CHAPTERS[data], parse_mode="Markdown", reply_markup=back_menu()
         )
     elif data == "final":
         await query.edit_message_text(
-            FINAL_TEXT,
-            parse_mode="Markdown",
-            reply_markup=back_menu(),
+            FINAL_TEXT, parse_mode="Markdown", reply_markup=back_menu()
         )
+
+
+# ===================== HEALTH-CHECK ДЛЯ RENDER =====================
+
+async def health(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Не используется в webhook, но оставлен на случай команд."""
+    await update.message.reply_text("✅ Бот жив.")
 
 
 # ===================== ЗАПУСК =====================
 
-def build_application() -> Application:
-    """Создаёт Application с увеличенными таймаутами для long-polling."""
-    return (
+def main():
+    if not RENDER_URL:
+        raise RuntimeError(
+            "RENDER_EXTERNAL_URL не задан. "
+            "На Render он появляется автоматически, локально задай вручную."
+        )
+
+    app = (
         Application.builder()
         .token(TOKEN)
-        # Таймауты для getUpdates (long-polling) — Telegram держит соединение до 30 сек
-        .get_updates_read_timeout(60.0)
-        .get_updates_connect_timeout(15.0)
-        .get_updates_pool_timeout(10.0)
-        # Общие таймауты для остальных API-запросов
         .read_timeout(30.0)
         .connect_timeout(10.0)
         .pool_timeout(5.0)
         .build()
     )
 
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("health", health))
+    app.add_handler(CallbackQueryHandler(button_handler))
 
-def main():
-    while True:
-        try:
-            app = build_application()
-            app.add_handler(CommandHandler("start", start))
-            app.add_handler(CallbackQueryHandler(button_handler))
-            logger.info("✅ Бот запущен и слушает Telegram...")
-            app.run_polling(
-                allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=False,
-                close_loop=False,
-            )
-        except (KeyboardInterrupt, SystemExit):
-            logger.info("🛑 Бот остановлен вручную.")
-            break
-        except Exception as e:
-            logger.error(f"💥 Бот упал: {e}. Перезапуск через 10 секунд...", exc_info=True)
-            time.sleep(10)
+    logger.info(f"🚀 Запуск webhook на порту {PORT}, URL: {RENDER_URL}")
+
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TOKEN,
+        webhook_url=f"{RENDER_URL}/{TOKEN}",
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+    )
 
 
 if __name__ == "__main__":
