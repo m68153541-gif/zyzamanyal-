@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 
@@ -11,7 +12,6 @@ from telegram.ext import (
 
 # ===================== НАСТРОЙКИ =====================
 TOKEN = os.environ.get("BOT_TOKEN", "8770882017:AAGwGisD6Pjy9xQESCc1x2Bnsv1gVBlNCHg")
-# Render даёт переменную RENDER_EXTERNAL_URL автоматически
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "")
 PORT = int(os.environ.get("PORT", 10000))
 
@@ -140,9 +140,7 @@ def back_menu() -> InlineKeyboardMarkup:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        START_TEXT,
-        parse_mode="Markdown",
-        reply_markup=main_menu(),
+        START_TEXT, parse_mode="Markdown", reply_markup=main_menu()
     )
 
 
@@ -165,10 +163,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# ===================== HEALTH-CHECK ДЛЯ RENDER =====================
-
 async def health(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Не используется в webhook, но оставлен на случай команд."""
     await update.message.reply_text("✅ Бот жив.")
 
 
@@ -177,9 +172,17 @@ async def health(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     if not RENDER_URL:
         raise RuntimeError(
-            "RENDER_EXTERNAL_URL не задан. "
-            "На Render он появляется автоматически, локально задай вручную."
+            "RENDER_EXTERNAL_URL не задан. На Render он появляется автоматически."
         )
+
+    # Явно создаём и назначаем event loop — обходит баг Python 3.14
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError
+    except (RuntimeError, DeprecationWarning):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
     app = (
         Application.builder()
